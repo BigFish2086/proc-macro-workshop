@@ -1,5 +1,4 @@
 use proc_macro::TokenStream;
-// use proc_macro2::{Ident, Span};
 use quote::quote;
 use syn::{parse_macro_input, DeriveInput};
 
@@ -87,25 +86,29 @@ pub fn derive(input: TokenStream) -> TokenStream {
         }
     });
 
+    // let mut inner = proc_macro2::TokenStream::new();
+    // inner.extend(vec![
+    //     proc_macro2::TokenTree::Ident(proc_macro2::Ident::new("doc", proc_macro2::Span::call_site())),
+    //     proc_macro2::TokenTree::Punct(proc_macro2::Punct::new('=', proc_macro2::Spacing::Alone)),
+    //     proc_macro2::TokenTree::Literal(proc_macro2::Literal::string(&format!("\
+    //         Implements the [builder pattern] for [`{}`].\n\
+    //         \n\
+    //         [builder pattern]: https://rust-lang.github.io/api-guidelines/type-safety.html#c-builder", name)))
+    // ]);
 
-    let mut inner = proc_macro2::TokenStream::new();
-    inner.extend(vec![
-        proc_macro2::TokenTree::Ident(proc_macro2::Ident::new("doc", proc_macro2::Span::call_site())),
-        proc_macro2::TokenTree::Punct(proc_macro2::Punct::new('=', proc_macro2::Spacing::Alone)),
-        proc_macro2::TokenTree::Literal(proc_macro2::Literal::string(&format!("\
-            Implements the [builder pattern] for [`{}`].\n\
-            \n\
-            [builder pattern]: https://rust-lang.github.io/api-guidelines/type-safety.html#c-builder", name)))
-    ]);
-
-    let mut ts = proc_macro2::TokenStream::new();
-    ts.extend(vec![
-        proc_macro2::TokenTree::Punct(proc_macro2::Punct::new('#', proc_macro2::Spacing::Alone)),
-        proc_macro2::TokenTree::Group(proc_macro2::Group::new(proc_macro2::Delimiter::Bracket, inner)),
-    ]);
+    // let mut ts = proc_macro2::TokenStream::new();
+    // ts.extend(vec![
+    //     proc_macro2::TokenTree::Punct(proc_macro2::Punct::new('#', proc_macro2::Spacing::Alone)),
+    //     proc_macro2::TokenTree::Group(proc_macro2::Group::new(proc_macro2::Delimiter::Bracket, inner)),
+    // ]);
+    //
+    let doc = format!("\
+        Implements the [builder pattern] for [`{}`].\n\
+        \n\
+        [builder pattern]: https://rust-lang.github.io/api-guidelines/type-safety.html#c-builder", name);
 
     let gen = quote! {
-        #ts
+        #[doc = #doc]
         pub struct #builder_ident {
             #(#options_fields),*
         }
@@ -183,7 +186,10 @@ fn extend_method(f: &syn::Field) -> Option<(bool, proc_macro2::TokenStream)> {
             match nvs.pop().unwrap().into_value() {
                 syn::Meta::NameValue(nv) if nv.path.is_ident("each") => {
                     let arg = match &nv.value {
-                        syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(ref s), .. }) => s,
+                        syn::Expr::Lit(syn::ExprLit {
+                            lit: syn::Lit::Str(ref s),
+                            ..
+                        }) => s,
                         _ => return mk_err(&nvs),
                     };
                     let arg = syn::Ident::new(&arg.value(), name.span());
