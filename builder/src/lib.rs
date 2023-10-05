@@ -1,6 +1,6 @@
 use proc_macro::TokenStream;
 // use proc_macro2::{Ident, Span};
-use quote::{quote, ToTokens};
+use quote::quote;
 use syn::{parse_macro_input, DeriveInput};
 
 #[proc_macro_derive(Builder, attributes(builder))]
@@ -39,7 +39,7 @@ pub fn derive(input: TokenStream) -> TokenStream {
         let name = &f.ident;
         if builder_of(&f).is_some() {
             quote! {
-                #name: Vec::new()
+                #name: ::std::vec::Vec::new()
             }
         } else {
             quote! {
@@ -62,28 +62,19 @@ pub fn derive(input: TokenStream) -> TokenStream {
     });
 
     let methods = fields.iter().map(|f| {
-        let name = &f.ident;
+        let name = f.ident.as_ref().unwrap();
         let ty = &f.ty;
-        let set_method = if let Some(inner_ty) = ty_inner_type("Option", &ty) {
-            quote! {
-                pub fn #name(&mut self, #name: #inner_ty) -> &mut Self {
-                    self.#name = ::std::option::Option::Some(#name);
-                    self
-                }
-            }
+        let (arg_type, value) = if let Some(inner_ty) = ty_inner_type("Option", &ty) {
+            (inner_ty, quote! { ::std::option::Option::Some(#name) })
         } else if builder_of(&f).is_some() {
-            quote! {
-                pub fn #name(&mut self, #name: #ty) -> &mut Self {
-                    self.#name = #name;
-                    self
-                }
-            }
+            (ty, quote! { #name })
         } else {
-            quote! {
-                pub fn #name(&mut self, #name: #ty) -> &mut Self {
-                    self.#name = ::std::option::Option::Some(#name);
-                    self
-                }
+            (ty, quote! { ::std::option::Option::Some(#name) })
+        };
+        let set_method = quote! {
+            pub fn #name(&mut self, #name: #arg_type) -> &mut Self {
+                self.#name = #value;
+                self
             }
         };
         match extend_method(&f) {
@@ -96,7 +87,25 @@ pub fn derive(input: TokenStream) -> TokenStream {
         }
     });
 
+
+    let mut inner = proc_macro2::TokenStream::new();
+    inner.extend(vec![
+        proc_macro2::TokenTree::Ident(proc_macro2::Ident::new("doc", proc_macro2::Span::call_site())),
+        proc_macro2::TokenTree::Punct(proc_macro2::Punct::new('=', proc_macro2::Spacing::Alone)),
+        proc_macro2::TokenTree::Literal(proc_macro2::Literal::string(&format!("\
+            Implements the [builder pattern] for [`{}`].\n\
+            \n\
+            [builder pattern]: https://rust-lang.github.io/api-guidelines/type-safety.html#c-builder", name)))
+    ]);
+
+    let mut ts = proc_macro2::TokenStream::new();
+    ts.extend(vec![
+        proc_macro2::TokenTree::Punct(proc_macro2::Punct::new('#', proc_macro2::Spacing::Alone)),
+        proc_macro2::TokenTree::Group(proc_macro2::Group::new(proc_macro2::Delimiter::Bracket, inner)),
+    ]);
+
     let gen = quote! {
+        #ts
         pub struct #builder_ident {
             #(#options_fields),*
         }
@@ -137,49 +146,63 @@ fn ty_inner_type<'a>(wrapper: &str, ty: &'a syn::Type) -> Option<&'a syn::Type> 
     None
 }
 
-fn builder_of(f: &syn::Field) -> Option<proc_macro2::Group> {
+fn builder_of(f: &syn::Field) -> Option<&syn::Attribute> {
     for attr in &f.attrs {
         if attr.path().segments.len() == 1 && attr.path().segments[0].ident == "builder" {
-            let tts = attr.meta.to_token_stream().into_iter();
-            for tt in tts {
-                if let proc_macro2::TokenTree::Group(g) = tt {
-                    return Some(g);
-                }
-            }
+            return Some(attr);
         }
     }
     None
 }
 
 fn extend_method(f: &syn::Field) -> Option<(bool, proc_macro2::TokenStream)> {
-    // eprintln!("{:#?}", &f.attrs);
     let name = f.ident.as_ref().unwrap();
-    let g = builder_of(f)?;
-    let mut iter = g.stream().into_iter();
-    match iter.next().unwrap() {
-        proc_macro2::TokenTree::Ident(ref i) => assert_eq!(i, "each"),
-        x => panic!("expected `each` found {}", x),
-    };
-    match iter.next().unwrap() {
-        proc_macro2::TokenTree::Punct(ref p) => assert_eq!(p.as_char(), '='),
-        x => panic!("expected `=` found {}", x),
-    };
-    let arg = match iter.next().unwrap() {
-        proc_macro2::TokenTree::Literal(l) => l,
-        x => panic!("expected `string` found {}", x),
-    };
-    match syn::Lit::new(arg) {
-        syn::Lit::Str(ref s) => {
-            let arg = syn::Ident::new(&s.value(), s.span());
-            let inner_ty = ty_inner_type("Vec", &f.ty).unwrap();
-            let method = quote! {
-                pub fn #arg(&mut self, #arg: #inner_ty) -> &mut Self {
-                    self.#name.push(#arg);
-                    self
-                }
+    let attr = builder_of(f)?;
+
+    fn mk_err<T: quote::ToTokens>(t: T) -> Option<(bool, proc_macro2::TokenStream)> {
+        Some((
+            false,
+            syn::Error::new_spanned(t, "expected `builder(each = \"...\")`").to_compile_error(),
+        ))
+    }
+
+    match &attr.meta {
+        syn::Meta::List(list) if list.path.is_ident("builder") => {
+            // list here is .. in #[builder(..)]
+            let mut nvs = match list.parse_args_with(
+                syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
+            ) {
+                Ok(nested) => nested,
+                Err(_) => return mk_err(list), // return Some((false, e.to_compile_error())),
             };
-            return Some((&arg == name, method));
+            if nvs.len() != 1 {
+                return mk_err(&nvs);
+            }
+
+            // only one element here is (hopefully): each = "foo"
+            match nvs.pop().unwrap().into_value() {
+                syn::Meta::NameValue(nv) if nv.path.is_ident("each") => {
+                    let arg = match &nv.value {
+                        syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(ref s), .. }) => s,
+                        _ => return mk_err(&nvs),
+                    };
+                    let arg = syn::Ident::new(&arg.value(), name.span());
+                    let inner_ty = ty_inner_type("Vec", &f.ty).unwrap();
+                    let extend_method = quote! {
+                        pub fn #arg(&mut self, #arg: #inner_ty) -> &mut Self {
+                            self.#name.push(#arg);
+                            self
+                        }
+                    };
+                    return Some((&arg == name, extend_method));
+                }
+                _ => {
+                    return mk_err(&attr.meta);
+                }
+            }
         }
-        x => panic!("expected string found {:#?}", x),
+        _ => {
+            return mk_err(&attr);
+        }
     };
 }

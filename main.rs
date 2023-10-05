@@ -13,6 +13,7 @@ use derive_builder::Builder;
 #[allow(dead_code)]
 pub struct Command {
     executable: String,
+    // #[builder(each = "arg", iam="groot")]
     #[builder(each = "arg")]
     args: Vec<String>,
     #[builder(each = "env")]
