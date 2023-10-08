@@ -6,30 +6,11 @@
 // To run the code:
 //     $ cargo run
 
+use seq::seq;
 
-use derive_builder::Builder;
-
-#[derive(Builder)]
-#[allow(dead_code)]
-pub struct Command {
-    executable: String,
-    // #[builder(each = "arg", iam="groot")]
-    #[builder(each = "arg")]
-    args: Vec<String>,
-    #[builder(each = "env")]
-    env: Vec<String>,
-    current_dir: Option<String>,
-}
+seq!(N in 1..4 {
+    compile_error!(concat!("error number ", stringify!(N)));
+});
 
 fn main() {
-    let command = Command::builder()
-        .executable("cargo".to_owned())
-        .arg("build".to_owned())
-        .arg("--release".to_owned())
-        .build()
-        .unwrap();
-
-    assert_eq!(command.executable, "cargo");
-    assert_eq!(command.args, vec!["build", "--release"]);
 }
-
