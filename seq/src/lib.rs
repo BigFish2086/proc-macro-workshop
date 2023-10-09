@@ -25,7 +25,7 @@ impl Parse for SeqMacroInput {
         let content;
         let _braced = syn::braced!(content in input);
         let ts = TokenStream2::parse(&content)?;
-        eprintln!("ts: {:#?}", ts);
+        // eprintln!("ts: {:#?}", ts);
 
         Ok(SeqMacroInput {
             ident,
@@ -47,9 +47,14 @@ impl Into<TokenStream2> for SeqMacroInput {
 }
 
 impl SeqMacroInput {
-    fn expand_token_tree(&self, stream: TokenTree2, i: u64) -> TokenTree2 {
+    fn expand_token_tree(
+        &self,
+        stream: TokenTree2,
+        rest: &mut proc_macro2::token_stream::IntoIter,
+        i: u64,
+    ) -> TokenTree2 {
         match stream {
-            TokenTree2::Group(group) => {
+            TokenTree2::Group(ref group) => {
                 let mut expanded = proc_macro2::Group::new(
                     group.delimiter(),
                     self.expand_token_stream(group.stream(), i),
@@ -63,15 +68,37 @@ impl SeqMacroInput {
                 lit.set_span(ident.span());
                 TokenTree2::Literal(lit)
             }
+            TokenTree2::Ident(mut ident) => {
+                let mut peek = rest.clone();
+                match (peek.next(), peek.next()) {
+                    // example: `func~N`
+                    (Some(TokenTree2::Punct(ref punct)), Some(TokenTree2::Ident(ref ident2)))
+                        if punct.as_char() == '~' && ident2 == &self.ident => {
+                            ident = proc_macro2::Ident::new(&format!("{}{}", ident, i), ident.span()) .into();
+                            *rest = peek.clone();
+                            match peek.next() {
+                                // to consume another '~' if found, example: `func~N~`
+                                Some(TokenTree2::Punct(ref punct)) if punct.as_char() == '~' => {
+                                    *rest = peek;
+                                }
+                                _ => {}
+                            }
+                        }
+                    _ => {}
+                };
+                TokenTree2::Ident(ident)
+            }
             tt => tt,
         }
     }
 
     fn expand_token_stream(&self, stream: TokenStream2, i: u64) -> TokenStream2 {
-        stream
-            .into_iter()
-            .map(|tt| self.expand_token_tree(tt, i))
-            .collect()
+        let mut out = TokenStream2::new();
+        let mut tts = stream.into_iter();
+        while let Some(tt) = tts.next() {
+            out.extend(std::iter::once(self.expand_token_tree(tt, &mut tts, i)));
+        }
+        out.into()
     }
 }
 
